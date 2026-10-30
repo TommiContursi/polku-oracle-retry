@@ -6,7 +6,7 @@ name: Create Polku BRouter server
 
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
