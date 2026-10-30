@@ -1,0 +1,81 @@
+name: Create Polku BRouter server
+
+# Oracle often has no free Ampere capacity in Stockholm. This retries the
+# polku-brouter stack once an hour until the server exists, then just checks
+# and exits. A new issue in this repo means the server was created.
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-apply
+  cancel-in-progress: false
+
+env:
+  STACK_ID: ocid1.ormstack.oc1.eu-stockholm-1.amaaaaaa77nokliaa6sixcsvscqg3iunqanhjxdngycopqfdt2hxewsqsxaq
+  OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install OCI CLI
+        run: pip install --quiet oci-cli
+
+      - name: Configure OCI CLI
+        env:
+          OCI_USER: ${{ secrets.OCI_USER_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.oci
+          printf '%s\n' "$OCI_KEY" > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
+          cat > ~/.oci/config <<CFG
+          [DEFAULT]
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
+          region=eu-stockholm-1
+          key_file=$HOME/.oci/key.pem
+          CFG
+          chmod 600 ~/.oci/config
+          # Fail loudly (GitHub emails you) if the key or OCIDs are wrong
+          oci iam region list > /dev/null
+
+      - name: Retry the stack until the server exists
+        env:
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(oci compute instance list --compartment-id "$OCI_TENANCY" --display-name polku-brouter --all \
+              | jq '[.data[]? | select(."lifecycle-state" != "TERMINATED")] | length')
+          if [ "${n:-0}" -gt 0 ]; then
+            echo "Server already exists, nothing to do. You can disable this workflow." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          oci resource-manager job create-apply-job --stack-id "$STACK_ID" \
+            --execution-plan-strategy AUTO_APPROVED \
+            --wait-for-state SUCCEEDED --wait-for-state FAILED \
+            --max-wait-seconds 900 > job.json || true
+          state=$(jq -r '.data."lifecycle-state" // "unknown"' job.json 2>/dev/null || echo unknown)
+          echo "Apply job state: $state"
+
+          if [ "$state" = "SUCCEEDED" ]; then
+            url=$(oci resource-manager stack get-stack-tf-state --stack-id "$STACK_ID" --file - \
+                  | jq -r '.outputs.brouter_url.value')
+            echo "Server created: $url" | tee -a "$GITHUB_STEP_SUMMARY"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Polku BRouter server created" \
+              --body "Oracle created the server. BRouter address (ready about 10 minutes after creation): $url"
+          else
+            echo "No server yet (job state: $state). Next try in an hour." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
