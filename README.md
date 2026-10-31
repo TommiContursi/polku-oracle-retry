@@ -32,9 +32,9 @@ the stack again (Stack → Edit → upload the files).
 
 - One `VM.Standard.A1.Flex` machine, Ubuntu 24.04 (Arm), public IP.
 - Size comes from the stack variables `ocpus` and `memory_gbs`
-  (default in `main.tf`: 1 OCPU / 6 GB). The stack is set to 2 OCPU / 12 GB:
-  the apply job of 31 Oct 2026 asked for that. Check the current values in
-  Oracle: Stack → Variables.
+  (default in `main.tf`: 1 OCPU / 6 GB). The stack now asks for 1 OCPU / 6 GB
+  (changed from 2 OCPU / 12 GB on 31 Oct 2026, to get capacity faster). Check
+  the current values in Oracle: Stack → Variables.
 - `cloud-init.sh` runs once on first boot and installs:
   - BRouter 1.7.10 with the Finland data (8 tiles from brouter.de) and Polku's
     profiles, listening only on `127.0.0.1:17777`
@@ -92,7 +92,8 @@ confirmed.
 3. Try it in Polku first via Settings → Routing server. Then make it the default
    (`BROUTER` in `js/config.js`). Polku's PRODUCT.md asks for an issue with gains
    and costs before adding an own service.
-4. The stack already asks for 2 OCPU / 12 GB, the whole free quota. Do not raise it.
+4. Later, for Overpass, grow the machine to 2 OCPU / 12 GB (stack variables →
+   Apply). That is the whole free quota. Do not raise it further.
 5. Overpass (phase 2): decide the area (Finland by default), install it on the
    same machine, and add simple monitoring so stale data is noticed.
 6. Disable this workflow once the server exists.
