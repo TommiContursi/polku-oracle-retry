@@ -1,12 +1,14 @@
 name: Create Polku BRouter server
 
-# Oracle often has no free Ampere capacity in Stockholm. This retries the
-# polku-brouter stack every 5 minutes until the server exists, then just checks
-# and exits. A new issue in this repo means the server was created.
+# Oracle often has no free Ampere capacity in Stockholm. This asks Oracle's
+# capacity report every minute and retries the polku-brouter stack at once when
+# the report says AVAILABLE, and about every 5 minutes anyway (the report may be
+# wrong for Always Free). When the server exists it just checks and exits.
+# A new issue in this repo means the server was created.
 #
-# GitHub drops most scheduled runs (about 2 in 7 hours for */5), so the 5 minute
-# cadence lives in a loop inside the job. The cron only starts a new loop after
-# the previous one ends; the concurrency group queues it until then.
+# GitHub drops most scheduled runs (about 2 in 7 hours for */5), so the cadence
+# lives in a loop inside the job. The cron only starts a new loop after the
+# previous one ends; the concurrency group queues it until then.
 
 on:
   schedule:
@@ -60,33 +62,49 @@ jobs:
           OCI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The capacity report must ask for the same size as the stack, so read it from the stack variables
+          ad=$(oci iam availability-domain list --compartment-id "$OCI_TENANCY" | jq -r '.data[0].name')
+          shape=$(oci resource-manager stack get --stack-id "$STACK_ID" | jq -c '[{instanceShape: "VM.Standard.A1.Flex",
+            instanceShapeConfig: {ocpus: (.data.variables.ocpus // "1" | tonumber), memoryInGBs: (.data.variables.memory_gbs // "6" | tonumber)}}]') || true
+          [ -n "$shape" ] || shape='[{"instanceShape":"VM.Standard.A1.Flex","instanceShapeConfig":{"ocpus":1,"memoryInGBs":6}}]'
+          echo "Capacity report for $ad: $shape"
+
           # 19800s plus one 900s apply wait and setup stays under timeout-minutes
+          last=-300
           while [ "$SECONDS" -lt 19800 ]; do
             start=$SECONDS
-            n=$(oci compute instance list --compartment-id "$OCI_TENANCY" --display-name polku-brouter --all \
-                | jq '[.data[]? | select(."lifecycle-state" != "TERMINATED")] | length')
-            if [ "${n:-0}" -gt 0 ]; then
-              echo "Server already exists, nothing to do. You can disable this workflow." | tee -a "$GITHUB_STEP_SUMMARY"
-              exit 0
+            cap=$(oci compute compute-capacity-report create --no-retry --compartment-id "$OCI_TENANCY" \
+                  --availability-domain "$ad" --shape-availabilities "$shape" 2>cap.err \
+                  | jq -r '.data."shape-availabilities"[0]."availability-status" // "unknown"') || true
+            echo "Capacity report: ${cap:-unknown $(grep -o '"code": "[A-Za-z]*"' cap.err | head -1)}"
+
+            if [ "$cap" = "AVAILABLE" ] || [ $((SECONDS - last)) -ge 300 ]; then
+              last=$SECONDS
+              n=$(oci compute instance list --compartment-id "$OCI_TENANCY" --display-name polku-brouter --all \
+                  | jq '[.data[]? | select(."lifecycle-state" != "TERMINATED")] | length')
+              if [ "${n:-0}" -gt 0 ]; then
+                echo "Server already exists, nothing to do. You can disable this workflow." | tee -a "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+
+              oci resource-manager job create-apply-job --stack-id "$STACK_ID" \
+                --execution-plan-strategy AUTO_APPROVED \
+                --wait-for-state SUCCEEDED --wait-for-state FAILED \
+                --max-wait-seconds 900 > job.json || true
+              state=$(jq -r '.data."lifecycle-state" // "unknown"' job.json 2>/dev/null || echo unknown)
+              echo "Apply job state: $state"
+
+              if [ "$state" = "SUCCEEDED" ]; then
+                url=$(oci resource-manager stack get-stack-tf-state --stack-id "$STACK_ID" --file - \
+                      | jq -r '.outputs.brouter_url.value')
+                echo "Server created: $url" | tee -a "$GITHUB_STEP_SUMMARY"
+                gh issue create --repo "$GITHUB_REPOSITORY" --title "Polku BRouter server created" \
+                  --body "Oracle created the server. BRouter address (ready about 10 minutes after creation): $url"
+                exit 0
+              fi
+
+              echo "No server yet (job state: $state)." | tee -a "$GITHUB_STEP_SUMMARY"
             fi
-
-            oci resource-manager job create-apply-job --stack-id "$STACK_ID" \
-              --execution-plan-strategy AUTO_APPROVED \
-              --wait-for-state SUCCEEDED --wait-for-state FAILED \
-              --max-wait-seconds 900 > job.json || true
-            state=$(jq -r '.data."lifecycle-state" // "unknown"' job.json 2>/dev/null || echo unknown)
-            echo "Apply job state: $state"
-
-            if [ "$state" = "SUCCEEDED" ]; then
-              url=$(oci resource-manager stack get-stack-tf-state --stack-id "$STACK_ID" --file - \
-                    | jq -r '.outputs.brouter_url.value')
-              echo "Server created: $url" | tee -a "$GITHUB_STEP_SUMMARY"
-              gh issue create --repo "$GITHUB_REPOSITORY" --title "Polku BRouter server created" \
-                --body "Oracle created the server. BRouter address (ready about 10 minutes after creation): $url"
-              exit 0
-            fi
-
-            echo "No server yet (job state: $state). Next try in 5 minutes." | tee -a "$GITHUB_STEP_SUMMARY"
-            wait=$((start + 300 - SECONDS))
+            wait=$((start + 60 - SECONDS))
             [ "$wait" -le 0 ] || sleep "$wait"
           done

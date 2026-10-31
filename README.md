@@ -32,9 +32,9 @@ the stack again (Stack → Edit → upload the files).
 
 - One `VM.Standard.A1.Flex` machine, Ubuntu 24.04 (Arm), public IP.
 - Size comes from the stack variables `ocpus` and `memory_gbs`
-  (default in `main.tf`: 1 OCPU / 6 GB). The stack is set to 2 OCPU / 12 GB:
-  the apply job of 31 Oct 2026 asked for that. Check the current values in
-  Oracle: Stack → Variables.
+  (default in `main.tf`: 1 OCPU / 6 GB). The stack now asks for 1 OCPU / 6 GB
+  (changed from 2 OCPU / 12 GB on 31 Oct 2026, to get capacity faster). Check
+  the current values in Oracle: Stack → Variables.
 - `cloud-init.sh` runs once on first boot and installs:
   - BRouter 1.7.10 with the Finland data (8 tiles from brouter.de) and Polku's
     profiles, listening only on `127.0.0.1:17777`
@@ -45,9 +45,15 @@ the stack again (Stack → Edit → upload the files).
 
 ## The retry workflow
 
-`.github/workflows/create-server.yml` starts an apply job on the stack every
-5 minutes until a machine called `polku-brouter` exists. After that it only
+`.github/workflows/create-server.yml` asks Oracle's capacity report every minute
+if the stack's machine size (read from the stack variables) is available. It
+starts an apply job on the stack at once when the report says `AVAILABLE`, and
+about every 5 minutes anyway, because the report may be wrong for Always Free.
+It keeps going until a machine called `polku-brouter` exists. After that it only
 checks and exits; disable it then.
+
+Each minute the log shows `Capacity report: <status>`. `unknown` means the
+report call failed, and the line then shows Oracle's error code.
 
 Repository secrets it needs: `OCI_USER_OCID`, `OCI_FINGERPRINT`,
 `OCI_TENANCY_OCID`, `OCI_PRIVATE_KEY` (the private .pem of an Oracle API key).
@@ -59,9 +65,9 @@ cron entry (`*/5 * * * *`) only starts the next run. Runs go one at a time, so
 the next run waits until the current one ends.
 
 `TooManyRequests` (429) in the log means Oracle refused to start one apply job.
-The OCI CLI retries for about 90 seconds, then the loop tries again 5 minutes
-later. Nothing shows that the 5-minute loop causes it, but the cause is not
-confirmed.
+The OCI CLI retries for about 90 seconds. The next try comes about 5 minutes
+later, or sooner if the capacity report says `AVAILABLE`. Nothing shows that the
+loop causes it, but the cause is not confirmed.
 
 ## Decisions
 
@@ -82,6 +88,8 @@ confirmed.
 - `cloud-init.sh` has not run on a real machine.
 - BRouter's real memory and speed on A1.
 - Overpass disk and memory needs for Finland.
+- If the capacity report is right for Always Free A1. Compare each
+  `Capacity report: AVAILABLE` line in the log with the apply result after it.
 
 ## Next steps
 
@@ -92,7 +100,8 @@ confirmed.
 3. Try it in Polku first via Settings → Routing server. Then make it the default
    (`BROUTER` in `js/config.js`). Polku's PRODUCT.md asks for an issue with gains
    and costs before adding an own service.
-4. The stack already asks for 2 OCPU / 12 GB, the whole free quota. Do not raise it.
+4. Later, for Overpass, grow the machine to 2 OCPU / 12 GB (stack variables →
+   Apply). That is the whole free quota. Do not raise it further.
 5. Overpass (phase 2): decide the area (Finland by default), install it on the
    same machine, and add simple monitoring so stale data is noticed.
 6. Disable this workflow once the server exists.
