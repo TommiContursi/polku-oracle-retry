@@ -45,9 +45,15 @@ the stack again (Stack → Edit → upload the files).
 
 ## The retry workflow
 
-`.github/workflows/create-server.yml` starts an apply job on the stack every
-5 minutes until a machine called `polku-brouter` exists. After that it only
+`.github/workflows/create-server.yml` asks Oracle's capacity report every minute
+if the stack's machine size (read from the stack variables) is available. It
+starts an apply job on the stack at once when the report says `AVAILABLE`, and
+about every 5 minutes anyway, because the report may be wrong for Always Free.
+It keeps going until a machine called `polku-brouter` exists. After that it only
 checks and exits; disable it then.
+
+Each minute the log shows `Capacity report: <status>`. `unknown` means the
+report call failed, and the line then shows Oracle's error code.
 
 Repository secrets it needs: `OCI_USER_OCID`, `OCI_FINGERPRINT`,
 `OCI_TENANCY_OCID`, `OCI_PRIVATE_KEY` (the private .pem of an Oracle API key).
@@ -59,9 +65,9 @@ cron entry (`*/5 * * * *`) only starts the next run. Runs go one at a time, so
 the next run waits until the current one ends.
 
 `TooManyRequests` (429) in the log means Oracle refused to start one apply job.
-The OCI CLI retries for about 90 seconds, then the loop tries again 5 minutes
-later. Nothing shows that the 5-minute loop causes it, but the cause is not
-confirmed.
+The OCI CLI retries for about 90 seconds. The next try comes about 5 minutes
+later, or sooner if the capacity report says `AVAILABLE`. Nothing shows that the
+loop causes it, but the cause is not confirmed.
 
 ## Decisions
 
@@ -82,6 +88,8 @@ confirmed.
 - `cloud-init.sh` has not run on a real machine.
 - BRouter's real memory and speed on A1.
 - Overpass disk and memory needs for Finland.
+- If the capacity report is right for Always Free A1. Compare each
+  `Capacity report: AVAILABLE` line in the log with the apply result after it.
 
 ## Next steps
 
