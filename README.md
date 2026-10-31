@@ -6,7 +6,7 @@ so Polku does not depend on the per-IP limits of the public services.
 This README is the single place for the plan and the current state.
 Update it when something changes.
 
-## Current state (30 Oct 2026)
+## Current state (31 Oct 2026)
 
 - **No server yet.** Every attempt so far has failed with Oracle's
   "Out of host capacity" (no free Ampere machines in Stockholm).
@@ -57,6 +57,11 @@ which is why the workflow loops inside the job instead of relying on cron alone.
 One run keeps trying for up to 5.5 hours (the job limit is 350 minutes). The
 cron entry (`*/5 * * * *`) only starts the next run. Runs go one at a time, so
 the next run waits until the current one ends.
+
+`TooManyRequests` (429) in the log means Oracle refused to start one apply job.
+The OCI CLI retries for about 90 seconds, then the loop tries again 5 minutes
+later. Nothing shows that the 5-minute loop causes it, but the cause is not
+confirmed.
 
 ## Decisions
 
